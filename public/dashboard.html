@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Multi-Scrcpy Control Center</title>
+    <script src="jmuxer.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f0f0f;
+            --card-bg: #1e1e1e;
+            --accent-green: #4caf50;
+            --accent-red: #f44336;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            font-family: -apple-system, system-ui, sans-serif;
+            margin: 0;
+            color: #ddd;
+            overflow-x: hidden;
+        }
+
+        /* 頂部標題 */
+        .header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            height: 60px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            border-bottom: 1px solid #333;
+        }
+
+        /* 網格佈局：自動排列手機 */
+        .devices-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 25px;
+            padding: 80px 25px 40px 25px;
+            justify-items: center;
+        }
+
+        /* 手機卡片外框 */
+        .device-card {
+            background: var(--card-bg);
+            border-radius: 20px;
+            padding: 15px;
+            border: 1px solid #333;
+            transition: transform 0.2s, border-color 0.2s;
+            width: 100%;
+            max-width: 320px;
+            position: relative;
+        }
+
+        .device-card:hover {
+            border-color: #555;
+            transform: translateY(-5px);
+        }
+
+        .device-card.active {
+            border-color: var(--accent-green);
+            box-shadow: 0 0 15px rgba(76, 175, 80, 0.2);
+        }
+
+        .device-info {
+            font-size: 13px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            color: #aaa;
+        }
+
+        /* 手機螢幕容器 */
+        .phone-wrapper {
+            width: 100%;
+            aspect-ratio: 9 / 19;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            cursor: crosshair;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* 控制按鈕區 */
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            margin-top: 12px;
+        }
+
+        .ctrl-btn {
+            background: #333;
+            border: none;
+            color: white;
+            padding: 8px 0;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        .ctrl-btn:hover {
+            background: #444;
+        }
+
+        .ctrl-btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-power {
+            background: #2e7d32;
+        }
+
+        .btn-power.off {
+            background: #c62828;
+        }
+
+        /* 狀態點 */
+        .dot {
+            height: 8px;
+            width: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            background: gray;
+        }
+
+        .dot-online {
+            background: var(--accent-green);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="header">
+        <h2 style="margin:0; font-size:18px; letter-spacing: 1px;">📱 MULTI-CONTROL PANEL</h2>
+    </div>
+
+    <div id="devices-grid" class="devices-grid">
+    </div>
+
+    <script>
+        // 全域變數，紀錄目前滑鼠在哪台手機上（用於鍵盤輸入）
+        let focusedSerial = null;
+        const instances = {};
+
+        class ScrcpyInstance {
+            constructor(serial, parentElement) {
+                this.serial = serial;
+                this.parentElement = parentElement;
+                this.ws = null;
+                this.jmuxer = null;
+                this.isAwake = true;
+
+                this.render();
+                this.initWS();
+                this.bindEvents();
+            }
+
+            render() {
+                this.card = document.createElement('div');
+                this.card.className = 'device-card';
+                this.card.innerHTML = `
+                    <div class="device-info">
+                        <span><span class="dot" id="dot-${this.serial}"></span> ${this.serial}</span>
+                        <span id="res-${this.serial}">0x0</span>
+                    </div>
+                    <div class="phone-wrapper" id="wrapper-${this.serial}">
+                        <video id="video-${this.serial}" autoplay muted></video>
+                    </div>
+                    <div class="controls">
+                        <button class="ctrl-btn" onclick="instances['${this.serial}'].sendKey(3)">Home</button>
+                        <button class="ctrl-btn" onclick="instances['${this.serial}'].sendKey(4)">Back</button>
+                        <button class="ctrl-btn" onclick="instances['${this.serial}'].sendKey(187)">Rec</button>
+                        <button class="ctrl-btn btn-power" id="pwr-${this.serial}" onclick="instances['${this.serial}'].sendWake()">開屏</button>
+                    </div>
+                `;
+                this.parentElement.appendChild(this.card);
+            }
+
+            initWS() {
+                this.jmuxer = new JMuxer({
+                    node: `video-${this.serial}`,
+                    mode: 'video',
+                    flushingTime: 0, fps: 60, debug: false
+                });
+
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                this.ws = new WebSocket(`${protocol}//${window.location.host}?serial=${this.serial}`);
+                this.ws.binaryType = 'arraybuffer';
+
+                this.ws.onopen = () => document.getElementById(`dot-${this.serial}`).classList.add('dot-online');
+
+                this.ws.onmessage = (event) => {
+                    // if (event.data.byteLength > 200) {
+                    this.jmuxer.feed({ video: new Uint8Array(event.data) });
+                    // } else {
+                    //     try {
+                    //         const msg = JSON.parse(new TextDecoder().decode(event.data));
+                    //         if (msg.type === 'status') this.updateUI(msg);
+                    //     } catch(e) {}
+                    // }
+                };
+
+                const video = document.getElementById(`video-${this.serial}`);
+                video.onplaying = () => {
+                    document.getElementById(`res-${this.serial}`).innerText = `${video.videoWidth}x${video.videoHeight}`;
+                };
+            }
+
+            updateUI(data) {
+                if (data.wakeState) {
+                    this.isAwake = (data.wakeState === 'Awake');
+                    const btn = document.getElementById(`pwr-${this.serial}`);
+                    btn.innerText = this.isAwake ? "關屏" : "開屏";
+                    btn.className = this.isAwake ? "ctrl-btn btn-power" : "ctrl-btn btn-power off";
+                    document.getElementById(`wrapper-${this.serial}`).style.opacity = this.isAwake ? "1" : "0.4";
+                }
+            }
+
+            bindEvents() {
+                const wrapper = document.getElementById(`wrapper-${this.serial}`);
+
+                // 滑鼠進入時設定為焦點，方便鍵盤輸入
+                wrapper.addEventListener('mouseenter', () => {
+                    focusedSerial = this.serial;
+                    this.card.classList.add('active');
+                });
+                wrapper.addEventListener('mouseleave', () => {
+                    this.card.classList.remove('active');
+                });
+
+                const handleTouch = (action, e) => {
+                    const video = document.getElementById(`video-${this.serial}`);
+                    const rect = video.getBoundingClientRect();
+                    const x = (e.clientX - rect.left) / rect.width;
+                    const y = (e.clientY - rect.top) / rect.height;
+                    if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+                        this.send({ type: 'touch', action, x, y });
+                    }
+                };
+
+                wrapper.addEventListener('mousedown', e => {
+                    if (e.button === 0) {
+                        handleTouch(0, e);
+                        const move = (me) => handleTouch(2, me);
+                        const up = (ue) => {
+                            handleTouch(1, ue);
+                            window.removeEventListener('mousemove', move);
+                            window.removeEventListener('mouseup', up);
+                        };
+                        window.addEventListener('mousemove', move);
+                        window.addEventListener('mouseup', up);
+                    }
+                });
+            }
+
+            send(obj) {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify(obj));
+                }
+            }
+            sendKey(code) {
+                console.log(code)
+                // if (this && this.readyState === WebSocket.OPEN) {
+                    this.send({ type: 'key', keycode: code });
+                // }
+            }
+            // sendKey(code) { this.send({ type: 'key', keycode: code }); }
+            sendWake() { this.send({ type: 'wake' }); }
+            // sendText(txt) { this.send({ type: 'text', text: txt }); }
+        }
+
+        // 初始化：取得所有裝置
+        async function init() {
+            const urlParams = new URLSearchParams(window.location.search);
+            let serials = urlParams.get('serials')?.split(',') || [];
+
+            // 如果 URL 沒給，就去後端抓
+            if (serials.length === 0) {
+                try {
+                    const res = await fetch('/api/devices');
+                    const devices = await res.json();
+                    serials = devices.map(d => d.serial);
+                } catch (e) {
+                    console.error("無法獲取裝置清單");
+                    return;
+                }
+            }
+
+            const grid = document.getElementById('devices-grid');
+            serials.forEach(sn => {
+                instances[sn] = new ScrcpyInstance(sn, grid);
+            });
+        }
+
+        // 全域鍵盤監聽
+        window.addEventListener('keydown', (e) => {
+            if (!focusedSerial || !instances[focusedSerial]) return;
+            const inst = instances[focusedSerial];
+
+            const keyMap = { 'Backspace': 67, 'Enter': 66, 'Escape': 4, ' ': 62 };
+            if (keyMap[e.key]) {
+                e.preventDefault();
+                inst.sendKey(keyMap[e.key]);
+            }
+            // else if (e.key.length === 1) {
+            //     inst.sendText(e.key);
+            // }
+        });
+
+        init();
+    </script>
+</body>
+
+</html>

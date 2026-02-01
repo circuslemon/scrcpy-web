@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <title>值班手機鏡像中心</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background: #f0f2f5;
+            padding: 20px;
+        }
+
+        .device-card {
+            background: white;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .serial {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .model {
+            font-weight: bold;
+            font-size: 16px;
+            color: #333;
+        }
+
+        .status-dot {
+            height: 10px;
+            width: 10px;
+            background-color: #bbb;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .running {
+            background-color: #4caf50;
+        }
+
+        button {
+            cursor: pointer;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>已連線裝置列表</h1>
+    <!-- <div style="margin: 20px 0;">
+        <a href="dashboard.html"
+            style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
+            🚀 進入全裝置操作面板 (Dashboard)
+        </a>
+    </div> -->
+    </div>
+    <div id="device-list">載入中...</div>
+
+    <script>
+        async function loadDevices() {
+            // 移除了 "檢查輸入框焦點" 的邏輯，因為介面上已無輸入框
+
+            const res = await fetch('/api/devices');
+            const devices = await res.json();
+            console.log(devices)
+            const container = document.getElementById('device-list');
+            container.innerHTML = '';
+
+            devices.forEach(d => {
+                const div = document.createElement('div');
+                div.className = 'device-card';
+
+                // 別名顯示邏輯
+                const displayName = d.alias ? `${d.alias} (${d.model})` : d.model;
+
+                div.innerHTML = `
+                    <div class="info">
+                        <span class="model">
+                            <span class="status-dot ${d.status}"></span>
+                            ${displayName}
+                        </span>
+                        <span class="serial">Serial: ${d.serial}</span>
+                    </div>
+                    <div class="actions">
+                        <button onclick="openPlayer('${d.serial}')">開啟畫面</button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        function openPlayer(serial) {
+            // 開啟新視窗
+            window.open(`/player.html?serial=${serial}`, '_blank');
+        }
+
+        // 每 3 秒自動刷新列表
+        setInterval(loadDevices, 3000);
+        loadDevices();
+    </script>
+</body>
+
+</html>

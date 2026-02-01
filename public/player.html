@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scrcpy Remote Control</title>
+    <script src="jmuxer.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-bg: rgba(255, 255, 255, 0.04);
+            --primary-green: #4caf50;
+            --primary-red: #f44336;
+            --text-main: #ddd;
+            --text-muted: #888;
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            background-color: var(--bg-color);
+            font-family: -apple-system, system-ui, sans-serif;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: var(--text-main);
+            overflow: hidden;
+        }
+
+        /* --- 佈局組件 --- */
+        .top-nav {
+            position: fixed;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(30, 30, 30, 0.9);
+            backdrop-filter: blur(10px);
+            padding: 8px 20px;
+            border-radius: 50px;
+            display: flex;
+            gap: 12px;
+            z-index: 1000;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .main-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 30px;
+            padding: 60px 20px 40px;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .sidebar {
+            width: 260px;
+            background: var(--panel-bg);
+            padding: 20px;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(8px);
+            font-size: 14px;
+            height: fit-content;
+        }
+
+        @media (max-width: 1100px) {
+            .sidebar {
+                display: none;
+            }
+        }
+
+        /* --- 模擬手機外殼 --- */
+        .phone-wrapper {
+            height: 75vh;
+            aspect-ratio: 9 / 19.5;
+            background: #000;
+            border: 12px solid #222;
+            border-radius: 36px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
+            transition: opacity 0.3s ease;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            cursor: crosshair;
+        }
+
+        /* --- 按鈕樣式 --- */
+        .nav-btn {
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+            border: 1px solid var(--border-color);
+            padding: 6px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-size: 13px;
+        }
+
+        .nav-btn:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .btn-on {
+            background: var(--primary-green);
+            border: none;
+        }
+
+        .btn-off {
+            background: var(--primary-red);
+            border: none;
+        }
+
+        .bottom-bar {
+            background: rgba(0, 0, 0, 0.9);
+            padding: 8px 20px;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            font-size: 12px;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 4px;
+            background: var(--primary-red);
+        }
+
+        .active-dot {
+            background: var(--primary-green);
+            box-shadow: 0 0 8px var(--primary-green);
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="top-nav">
+        <button id="btn-home" class="nav-btn">Home</button>
+        <button id="btn-back" class="nav-btn">Back</button>
+        <button id="btn-recent" class="nav-btn">Recent</button>
+        <button id="btn-power" class="nav-btn btn-on">偵測中</button>
+    </nav>
+
+    <main class="main-container">
+        <aside class="sidebar">
+            <h3>🎮 操作指南</h3>
+            <p>• <b>左鍵點擊：</b> 觸控螢幕</p>
+            <p>• <b>左鍵拖曳：</b> 滑動頁面</p>
+        </aside>
+
+        <section class="phone-wrapper" id="phone-container">
+            <video id="player" autoplay muted playsinline></video>
+        </section>
+
+        <aside class="sidebar">
+            <h3>⚠️ 注意事項</h3>
+            <p>• 螢幕關閉時導航鍵將失效</p>
+            <!-- <p>• 離開前請關閉螢幕以省電</p> -->
+        </aside>
+    </main>
+
+    <footer class="bottom-bar">
+        <div><span id="conn-dot" class="status-dot"></span> <span id="conn-text">初始化...</span></div>
+        <span>|</span>
+        <div id="device-info">Device: ---</div>
+        <span>|</span>
+        <div id="power-text">Power: Unknown</div>
+        <span>|</span>
+        <div id="res-info">0x0</div>
+    </footer>
+
+    <script>
+        class ScrcpyClient {
+            constructor(serial) {
+                if (!serial) return alert('缺少設備序號 (Serial Number)');
+                this.serial = serial;
+                this.isAwake = false;
+                this.isFirstStatus = true;
+
+                // DOM 引用
+                this.video = document.getElementById('player');
+                this.btnPower = document.getElementById('btn-power');
+                this.navBtns = ['btn-home', 'btn-back', 'btn-recent'].map(id => document.getElementById(id));
+
+                this.initJMuxer();
+                this.connect();
+                this.bindEvents();
+            }
+
+            /**
+             * 初始化影音解碼器 (H.264 -> MediaSource)
+             */
+            initJMuxer() {
+                this.jmuxer = new JMuxer({
+                    node: 'player',
+                    mode: 'video',
+                    flushingTime: 0,    // 0 代表有數據立即推向解碼器，降低延遲
+                    clearBuffer: true,  // 避免解碼器內部緩存堆積
+                    fps: 60,
+                    debug: false
+                });
+            }
+
+            /**
+             * 建立 WebSocket 連線
+             */
+            connect() {
+                const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                this.ws = new WebSocket(`${protocol}//${location.host}?serial=${this.serial}`);
+                this.ws.binaryType = 'arraybuffer'; // 重要：接收二進位影音流
+
+                this.ws.onopen = () => this.updateUIStatus(true);
+                this.ws.onclose = () => this.updateUIStatus(false);
+                this.ws.onmessage = (e) => this.handleIncomingData(e.data);
+            }
+
+            /**
+             * 處理後端傳回的混合數據 (JSON 狀態或二進位影像)
+             */
+            handleIncomingData(data) {
+                const uint8 = new Uint8Array(data);
+
+                // 判斷是否為 H.264 影像頭 (通常以 00 00 00 01 開頭)
+                const isVideo = (uint8[0] === 0 && uint8[1] === 0 && uint8[2] === 0 && uint8[3] === 1);
+
+                // 如果不是影音數據且長度較短，嘗試解析為 JSON 控制訊息
+                if (!isVideo && data.byteLength < 1000) {
+                    try {
+                        const text = new TextDecoder().decode(uint8).trim();
+                        if (text.startsWith('{')) {
+                            this.processControlJson(JSON.parse(text));
+                            return;
+                        }
+                    } catch (e) { /* 解析失敗視為影像碎片 */ }
+                }
+
+                // 送入解碼器渲染畫面
+                this.jmuxer.feed({ video: uint8 });
+            }
+
+            /**
+             * 處理裝置狀態更新 (電源、型號)
+             */
+            processControlJson(msg) {
+                if (msg.type === 'status') {
+                    const awake = msg.wakeState === 'Awake';
+
+                    // 初次連線優化：若休眠則喚醒，若醒著則刷新 UI
+                    if (this.isFirstStatus) {
+                        if (!awake) this.send({ type: 'wake' });
+                        else {
+                            this.send({ type: 'key', keycode: 3 }); // 傳送 Home 鍵確保畫面刷新
+                            setTimeout(() => this.send({ type: 'key', keycode: 3 }), 150);
+                        }
+                        this.isFirstStatus = false;
+                    }
+                    this.updatePowerUI(awake);
+                }
+
+                if (msg.type === 'info') {
+                    document.getElementById('device-info').innerText = `${msg.model} (${msg.version})`;
+                }
+            }
+
+            /**
+             * 更新連線點與狀態文字
+             */
+            updateUIStatus(connected) {
+                const dot = document.getElementById('conn-dot');
+                const text = document.getElementById('conn-text');
+                text.innerText = connected ? `已連線 (${this.serial})` : '連線中斷';
+                dot.className = `status-dot ${connected ? 'active-dot' : ''}`;
+            }
+
+            /**
+             * 更新手機電源狀態相關 UI
+             */
+            updatePowerUI(isAwake) {
+                this.isAwake = isAwake;
+                const pText = document.getElementById('power-text');
+                const wrapper = document.getElementById('phone-container');
+
+                pText.innerText = `Power: ${isAwake ? 'ON' : 'OFF'}`;
+                pText.style.color = isAwake ? '#4caf50' : '#888';
+                wrapper.style.opacity = isAwake ? '1' : '0.4';
+
+                this.btnPower.innerText = isAwake ? '關閉手機螢幕' : '開啟手機螢幕';
+                this.btnPower.className = `nav-btn ${isAwake ? 'btn-off' : 'btn-on'}`;
+                this.navBtns.forEach(btn => btn.disabled = !isAwake);
+            }
+
+            /**
+             * 傳送指令至後端
+             */
+            send(obj) {
+                if (this.ws?.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify(obj));
+                }
+            }
+
+            /**
+             * 綁定 UI 事件與觸控邏輯
+             */
+            bindEvents() {
+                // 解析度顯示
+                this.video.onplaying = () => {
+                    document.getElementById('res-info').innerText = `${this.video.videoWidth}x${this.video.videoHeight}`;
+                };
+
+                // 導航鍵 (Android Keycodes: Home=3, Back=4, Recent=187)
+                const keyMap = { 'btn-home': 3, 'btn-back': 4, 'btn-recent': 187 };
+                Object.entries(keyMap).forEach(([id, code]) => {
+                    document.getElementById(id).onclick = () => this.send({ type: 'key', keycode: code });
+                });
+
+                // 電源鍵
+                this.btnPower.onclick = () => {
+                    this.btnPower.innerText = "處理中...";
+                    this.send({ type: 'wake' });
+                };
+
+                // 觸控轉換邏輯 (將滑鼠點擊轉為 0.0~1.0 的百分比座標)
+                const handleTouch = (action, e) => {
+                    const rect = this.video.getBoundingClientRect();
+                    const { videoWidth: vw, videoHeight: vh } = this.video;
+                    if (!vw) return;
+
+                    // 計算影片在元件內的實際縮放比例 (contain 模式)
+                    const scale = Math.min(rect.width / vw, rect.height / vh);
+                    const offsetX = (rect.width - vw * scale) / 2;
+                    const offsetY = (rect.height - vh * scale) / 2;
+
+                    // 取得相對於影像區域的 0.0 ~ 1.0 比例
+                    const dx = (e.clientX - rect.left - offsetX) / (vw * scale);
+                    const dy = (e.clientY - rect.top - offsetY) / (vh * scale);
+
+                    if (dx >= 0 && dx <= 1 && dy >= 0 && dy <= 1) {
+                        this.send({ type: 'touch', action, x: dx, y: dy });
+                    }
+                };
+
+                // 滑鼠觸控事件綁定
+                let isDragging = false;
+                this.video.onmousedown = (e) => { if (e.button === 0) { isDragging = true; handleTouch(0, e); } };
+                window.onmousemove = (e) => { if (isDragging) handleTouch(2, e); };
+                window.onmouseup = (e) => { if (isDragging) { isDragging = false; handleTouch(1, e); } };
+
+                // [極重要] 低延遲同步器：
+                // 當瀏覽器標籤背景化或網路波動，Video 播放進度會落後於 Buffer
+                // 每秒檢查一次，若落後超過 0.2 秒則強行跳至最新幀
+                setInterval(() => {
+                    if (this.video.buffered.length) {
+                        const end = this.video.buffered.end(0);
+                        if (end - this.video.currentTime > 0.2) {
+                            this.video.currentTime = end - 0.01;
+                        }
+                    }
+                }, 1000);
+            }
+        }
+
+        // 啟動應用
+        const client = new ScrcpyClient(new URLSearchParams(window.location.search).get('serial'));
+    </script>
+</body>
+
+</html>
