@@ -86,7 +86,14 @@
             console.log(devices)
             const container = document.getElementById('device-list');
             container.innerHTML = '';
-
+            devices.sort((a, b) => {
+                // 取得 a 的顯示名稱
+                const nameA = a.alias ? `${a.alias} (${a.model})` : a.model;
+                // 取得 b 的顯示名稱
+                const nameB = b.alias ? `${b.alias} (${b.model})` : b.model;
+                // 使用 localeCompare 進行字串比較（支援中文與字母排序）
+                return nameA.localeCompare(nameB);
+            });
             devices.forEach(d => {
                 const div = document.createElement('div');
                 div.className = 'device-card';
