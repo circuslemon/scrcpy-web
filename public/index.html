@@ -103,16 +103,19 @@
                         <span class="serial">Serial: ${d.serial}</span>
                     </div>
                     <div class="actions">
-                        <button onclick="openPlayer('${d.serial}')">開啟畫面</button>
+                        <button onclick="openPlayer('${d.serial}','${d.model}')">開啟畫面</button>
                     </div>
                 `;
                 container.appendChild(div);
             });
         }
 
-        function openPlayer(serial) {
+        function openPlayer(serial, model) {
             // 開啟新視窗
-            window.open(`/player.html?serial=${serial}`, '_blank');
+            const newWin = window.open(`/player.html?serial=${serial}`, '_blank');
+            newWin.onload = function () {
+                newWin.document.title = model;
+            };
         }
 
         // 每 3 秒自動刷新列表
