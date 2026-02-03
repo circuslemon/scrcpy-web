@@ -103,18 +103,18 @@
                         <span class="serial">Serial: ${d.serial}</span>
                     </div>
                     <div class="actions">
-                        <button onclick="openPlayer('${d.serial}','${d.model}')">開啟畫面</button>
+                        <button onclick="openPlayer('${d.serial}','${displayName}')">開啟畫面</button>
                     </div>
                 `;
                 container.appendChild(div);
             });
         }
 
-        function openPlayer(serial, model) {
+        function openPlayer(serial, displayName) {
             // 開啟新視窗
             const newWin = window.open(`/player.html?serial=${serial}`, '_blank');
             newWin.onload = function () {
-                newWin.document.title = model;
+                newWin.document.title = displayName;
             };
         }
 
